@@ -142,6 +142,8 @@ int main(int argc, char* argv[]) {
   }
 
   // Set up output file for plotting errors
+
+  cout << "Opening " << output_filename << " for output.\n\n";
   FILE* fp_out = fopen(output_filename.c_str(), "w+");
   fprintf(fp_out,
           "#time(s),x(m),y(m),z(m),qx,qy,qz,qw,gt_x(m),gt_y(m),gt_z(m),gt_qx,"
@@ -174,6 +176,7 @@ int main(int argc, char* argv[]) {
   imuBias::ConstantBias prior_imu_bias;  // assume zero initial bias
 
   Values initial_values;
+  int imu_measurement_count = 0;
   int correction_count = 0;
   initial_values.insert(X(correction_count), prior_pose);
   initial_values.insert(V(correction_count), prior_velocity);
@@ -230,25 +233,26 @@ int main(int argc, char* argv[]) {
     if (type == 0) {  // IMU measurement
       Vector6 imu;
       for (int i = 0; i < 5; ++i) {
-        getline(file, value, ',');
+        getline(ss, value, ',');
         imu(i) = stof(value.c_str());
       }
-      getline(file, value, '\n');
+      getline(ss, value, '\n');
       imu(5) = stof(value.c_str());
 
       // Adding the IMU preintegration.
       preintegrated->integrateMeasurement(imu.head<3>(), imu.tail<3>(), dt);
-
+      imu_measurement_count++;
     } else if (type == 1) {  // GPS measurement
       Vector7 gps;
       for (int i = 0; i < 6; ++i) {
-        getline(file, value, ',');
+        getline(ss, value, ',');
         gps(i) = stof(value.c_str());
       }
-      getline(file, value, '\n');
+      getline(ss, value, '\n');
       gps(6) = stof(value.c_str());
 
       correction_count++;
+      imu_measurement_count = 0;
 
       // Adding IMU factor and GPS factor and optimizing.
       auto preint_imu =
@@ -313,8 +317,10 @@ int main(int argc, char* argv[]) {
       current_orientation_error = euler_angle_error.norm();
 
       // display statistics
-      cout << "Position error:" << current_position_error << "\t "
-           << "Angular error:" << current_orientation_error << "\n";
+      cout << "Output time: " << output_time << ",\t"
+           << "Correction count: " << correction_count << ",\t"
+           << "Position error: " << current_position_error << ",\t "
+           << "Angular error: " << current_orientation_error << "\n";
 
       fprintf(fp_out, "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f\n",
               output_time, gtsam_position(0), gtsam_position(1),
