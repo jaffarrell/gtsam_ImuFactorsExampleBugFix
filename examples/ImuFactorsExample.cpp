@@ -85,10 +85,10 @@ po::variables_map parseOptions(int argc, char* argv[]) {
 
 std::shared_ptr<PreintegratedCombinedMeasurements::Params> imuParams() {
   // We use the sensor specs to build the noise model for the IMU factor.
-  double accel_noise_sigma = 0.0003924;
-  double gyro_noise_sigma = 0.000205689024915;
-  double accel_bias_rw_sigma = 0.004905;
-  double gyro_bias_rw_sigma = 0.000001454441043;
+  double accel_noise_sigma = 0.0003924;           // m/s/s  ??
+  double gyro_noise_sigma = 0.000205689024915;    // TODO: units
+  double accel_bias_rw_sigma = 0.004905;          // m/s/s/s ??
+  double gyro_bias_rw_sigma = 0.000001454441043;  // TODO:units
   Matrix33 measured_acc_cov = I_3x3 * pow(accel_noise_sigma, 2);
   Matrix33 measured_omega_cov = I_3x3 * pow(gyro_noise_sigma, 2);
   Matrix33 integration_error_cov =
@@ -99,16 +99,23 @@ std::shared_ptr<PreintegratedCombinedMeasurements::Params> imuParams() {
   auto p = PreintegratedCombinedMeasurements::Params::MakeSharedD(0.0);
   // PreintegrationBase params:
   p->accelerometerCovariance =
-      measured_acc_cov;  // acc white noise in continuous
+      measured_acc_cov;  // acc white noise in continuous. TODO: "continuous"
+                         // and "covariance" conflict
   p->integrationCovariance =
-      integration_error_cov;  // integration uncertainty continuous
+      integration_error_cov;  // integration uncertainty continuous TODO:
+                              // "continuous" and "covariance" conflict
   // should be using 2nd order integration
   // PreintegratedRotation params:
   p->gyroscopeCovariance =
-      measured_omega_cov;  // gyro white noise in continuous
+      measured_omega_cov;  // gyro white noise in continuous TODO: "continuous"
+                           // and "covariance" conflict
   // PreintegrationCombinedMeasurements params:
-  p->biasAccCovariance = bias_acc_cov;      // acc bias in continuous
-  p->biasOmegaCovariance = bias_omega_cov;  // gyro bias in continuous
+  p->biasAccCovariance =
+      bias_acc_cov;  // acc bias in continuous TODO: "continuous"
+                     // and "covariance" conflict
+  p->biasOmegaCovariance =
+      bias_omega_cov;  // gyro bias in continuous TODO: "continuous"
+                       // and "covariance" conflict
 #ifdef GTSAM_ALLOW_DEPRECATED_SINCE_V43
   Matrix66 bias_acc_omega_init =
       I_6x6 * 1e-5;  // error in the bias used for preintegration
@@ -176,7 +183,8 @@ int main(int argc, char* argv[]) {
   imuBias::ConstantBias prior_imu_bias;  // assume zero initial bias
 
   Values initial_values;
-  int imu_measurement_count = 0;
+  int imu_measurement_count = 0;  // count IMU measurements per correction
+  // initialize correction_count over corrections (and graph state nodes)
   int correction_count = 0;
   initial_values.insert(X(correction_count), prior_pose);
   initial_values.insert(V(correction_count), prior_velocity);
@@ -197,10 +205,11 @@ int main(int argc, char* argv[]) {
 
   auto p = imuParams();
 
+  // The PIMS have four steps (search PIM Step):
+  // PIM Step 1: declare a PIM
   std::shared_ptr<DefaultPreintegrationType> preintegrated =
       std::make_shared<PreintegratedImuMeasurements>(p, prior_imu_bias);
-
-  assert(preintegrated);
+  assert(preintegrated);  // ensure success of declaration
 
   // Store previous state for imu integration and latest predicted outcome.
   NavState prev_state(prior_pose, prior_velocity);
@@ -216,7 +225,7 @@ int main(int argc, char* argv[]) {
 
   // All priors have been set up, now iterate through the data file.
   std::string line;
-  int type{1000};
+  int type{1000};  // init to invalid value
   while (std::getline(file, line)) {
     std::stringstream ss(line);
     std::string value;
@@ -239,7 +248,8 @@ int main(int argc, char* argv[]) {
       getline(ss, value, '\n');
       imu(5) = stof(value.c_str());
 
-      // Adding the IMU preintegration.
+      // PIM Step 2: Adding each IMU measurement to the PIM, until the next GPS
+      // measurement
       preintegrated->integrateMeasurement(imu.head<3>(), imu.tail<3>(), dt);
       imu_measurement_count++;
     } else if (type == 1) {  // GPS measurement
@@ -251,10 +261,11 @@ int main(int argc, char* argv[]) {
       getline(ss, value, '\n');
       gps(6) = stof(value.c_str());
 
-      correction_count++;
-      imu_measurement_count = 0;
+      correction_count++;         // increment for new node at GPS time
+      imu_measurement_count = 0;  // reset the imu measurement count
 
-      // Adding IMU factor and GPS factor and optimizing.
+      // PIM Step 3: Preintegrate this sequence of IMU measurements and add the
+      // IMU factor
       auto preint_imu =
           dynamic_cast<const PreintegratedImuMeasurements&>(*preintegrated);
       ImuFactor imu_factor(X(correction_count - 1), V(correction_count - 1),
@@ -266,6 +277,7 @@ int main(int argc, char* argv[]) {
           B(correction_count - 1), B(correction_count), zero_bias,
           bias_noise_model));
 
+      // GPS: Construct and add the GPS factor
       auto correction_noise = noiseModel::Isotropic::Sigma(3, 1.0);
       GPSFactor gps_factor(X(correction_count),
                            Point3(gps(0),   // N,
