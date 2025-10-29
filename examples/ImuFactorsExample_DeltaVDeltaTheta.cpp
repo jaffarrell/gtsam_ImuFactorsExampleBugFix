@@ -269,14 +269,97 @@ po::variables_map parseOptions(int argc, char* argv[]) {
 }
 
 struct IMU_model_params {
-  double Tba;  // correlation time of accel bias, seconds
-  double Tbg;  // correlation time of gyro bias, seconds
+  double Ts{0};   // IMU sample period
+  double Tba{0};  // correlation time of accel bias, seconds
+  double Tbg{0};  // correlation time of gyro bias, seconds
+  double accel_noise_rtPSD{0};  // , m/s/s TODO: units??
+  double gyro_noise_rtPSD{0};   // , rad/s TODO: units??
+  double phi_a{0}; // discrete-time state transition, accelerometer
+  double phi_g{0}; // discrete-time state transition, gyro
+  double accel_bias_dn_PSD{0}; // cont-time accel bias drvng noise PSD
+  double gyro_bias_dn_PSD{0};  // cont-time gyro bias drvng noise PSD
+  double accel_bias_cov_ss{0}; // steady-state accel bias cov
+  double gyro_bias_cov_ss{0};  // steady-state accel bias cov
+  double accel_bias_dn_cov{0}; // discrete-time accl bias driving noise cov
+  double gyro_bias_dn_cov{0};  // discrete-time gyro bias driving noise cov
+  double accel_noise_rtCov{0}; // discrete-time vel. RW std
+  double gyro_noise_rtCov{0};  // discrete-time angl. RW std
+  
 
   IMU_model_params() {
     double Tpa = 100.0;  // seconds.
     Tba = Tpa / 1.89;    // seconds, Eqn. (37) in [CSM]
     double Tpg = 32;     // seconds.
     Tbg = Tpg / 1.89;    // seconds, Eqn. (37) in [CSM]
+  }
+
+  void print_IMU_params(){
+    cout << "The IMU sample rate is " << Ts << " second. \n";
+    print_instrument("accel", Tba, phi_a, accel_bias_cov_ss, 
+                    accel_noise_rtPSD, accel_bias_dn_PSD, 
+                    accel_noise_rtCov, accel_bias_dn_cov);
+    print_instrument("gyro",  Tbg, phi_g, gyro_bias_cov_ss, 
+                    gyro_noise_rtPSD, gyro_bias_dn_PSD, 
+                    gyro_noise_rtCov,  gyro_bias_dn_cov);
+  }
+
+  void print_instrument(string instrmnt, double Tb, double phi, double bias_cov_ss, 
+    double noise_rtPSD, double bias_dn_PSD, 
+    double noise_rtCov, double bias_dn_cov){
+      cout << "The " << instrmnt << " model parameters are: \n"
+           << "\tIn continuous-time: Correl. time = " << Tb << ", vel. RW rtPSD = " << noise_rtPSD
+           << ", bias drvng. noise rtPSD = " << sqrt(bias_dn_PSD) << ".\n"
+           << "\tIn discrete-time: phi = " << phi << ", vel. RW cov = " << noise_rtCov
+           << ", bias drvng. noise cov = " << sqrt(bias_dn_cov) << ".\n" << std::endl;
+    }
+
+  void set_accelInG(double accel_noise_rtPSD_g, double Ba_g){
+    // rt_PSD in m/s^2 TODO: units??
+    accel_noise_rtPSD = (accel_noise_rtPSD_g) * G;  
+    double Ba_mps2 = (Ba_g * G);
+    phi_a   = compute_phi(Ts, Tba);
+    accel_bias_dn_PSD = BiasInstabASD_to_BiasPSD(Ba_mps2, Tba );
+    accel_bias_cov_ss = compute_SteadyStateBiasCov(accel_bias_dn_PSD, Tba);
+    accel_bias_dn_cov = compute_BiasDiscrete_DrvngNs_cov(phi_a, accel_bias_cov_ss);
+  }
+
+  void set_gyroInDeg(double gyro_noise_rtPSD_dps, double Bg_degperhr){
+    // rt_PSD in rad/sec TODO: units??
+    gyro_noise_rtPSD = gyro_noise_rtPSD_dps * (DEG_2_RAD);
+    double Bg_rps = ((Bg_degperhr * (1 / 3600) * (DEG_2_RAD)));
+    phi_g   = compute_phi(Ts, Tbg);
+    gyro_bias_dn_PSD = BiasInstabASD_to_BiasPSD(Bg_rps, Tbg );
+    gyro_bias_cov_ss = compute_SteadyStateBiasCov(gyro_bias_dn_PSD, Tbg);
+    gyro_bias_dn_cov = compute_BiasDiscrete_DrvngNs_cov(phi_g, gyro_bias_cov_ss);
+  }
+
+  double compute_phi(double dT, double Tb){
+    double phi = exp(-dT / Tb);
+    return phi;
+  }  
+
+  // biasInstabASD is the value of the ASD in the flat region
+  double BiasInstabASD_to_BiasPSD(double biasInstabASD, double Tb ){
+    double biasInstab = biasInstabASD / 0.664; // Eqn. (32) in IEEE CSM
+    // PSD for accel bias process noise, Eqn. (39) in [CSM]. Units are (m/s^2)/rtHz
+    double bias_DrvngNs_PSD =
+      (2 * pow(biasInstab, 2) * log(2)) / (M_PI * pow(0.4365, 2) * (Tb));
+    return bias_DrvngNs_PSD;
+  }
+  
+  // Set dP/dt = 0 and solve for P (assume scalars or diagonal matrices)
+  // dP/dt = -lambda P - P * lambda + Q 
+  double compute_SteadyStateBiasCov(double bias_DrvngNs_PSD, double Tb){
+    double lambda = 1.0 / Tb;
+    double SteadyStateCov = bias_DrvngNs_PSD / 2.0 / lambda;
+    return SteadyStateCov;
+  }
+
+  // Set P(k+1) = P(k) = bias_cov_ss and solve for Qd
+  // P(k+1) = phi P(k) phi' + Qd     (assume scalars or diagonal matrices)
+  double compute_BiasDiscrete_DrvngNs_cov(double phi, double bias_cov_ss){
+    double bias_GM_dn_cov = bias_cov_ss * (1 - pow(phi, 2.0));
+    return bias_GM_dn_cov;
   }
 };
 
@@ -306,7 +389,7 @@ std::shared_ptr<PreintegratedCombinedMeasurements::Params> imuParams(
   // From ASD plot (flat region). For a first-order Gauss-Markov model, desired
   // delay for peak
 
-  double Ba_g = 8.0e-6;  // ASD value in the flat region, g's
+  double Ba_g = 1e-3;  //8.0e-6;  // ASD value in the flat region, g's
   double Ba =
       (Ba_g * G) / 0.664;  // Bias instability in (m/s/s). Eqn. (32) in [CSM]
   // PSD of accel bias, Eqn. (39) in [CSM]. Units are (m/s^2)^2/Hz
@@ -336,7 +419,7 @@ std::shared_ptr<PreintegratedCombinedMeasurements::Params> imuParams(
   // From ASD plot (flat region). For a first-order Gauss-Markov model, desired
   // delay for peak
 
-  double Bg_degperhr = 0.9;  // ASD value in flat region, degrees per hour
+  double Bg_degperhr = 5.0; //0.9;  // ASD value in flat region, degrees per hour
   double Bg = ((Bg_degperhr * (1 / 3600) * (DEG_2_RAD))) /
               0.664;  // Bias instability in (rad/s). Eqn. (32) in [CSM]
   // PSD of gyro bias, Eqn. (39) in [CSM]. Units are (rad/s)^2/Hz
@@ -385,6 +468,13 @@ std::shared_ptr<PreintegratedCombinedMeasurements::Params> imuParams(
   // PreintegrationCombinedMeasurements params:
   sPntrPIM->biasAccCovariance = bias_acc_cov;      // acc bias in continuous
   sPntrPIM->biasOmegaCovariance = bias_omega_cov;  // gyro bias in continuous
+
+  cout<< "accelerometerCovariance = " << measured_acc_cov << ", \n"
+      << "integrationCovaraince   = " << integration_error_cov << ",\n"
+      << "gyroscopeCovariance     = " << measured_omega_cov << ",\n"
+      << "biasAccCovariance       = " << bias_acc_cov << ",\n"
+      << "biasOmegaCovariance     = " << bias_omega_cov<< std::endl;
+
 #ifdef GTSAM_ALLOW_DEPRECATED_SINCE_V43
   Matrix66 bias_acc_omega_init =
       I_6x6 * 1e-5;  // error in the bias used for preintegration
@@ -439,6 +529,12 @@ int main(int argc, char* argv[]) {
   double sample_period = 1.0 / sample_freq;
   cout << "IMU Sampling period: " << sample_period
        << " seconds, IMU Sampling frequency: " << sample_freq << " Hz." << endl;
+
+  // Number of IMU measurements to preintegrate per PIM. Smaller numbers yield
+  // denser time series of INS states, but cost computations. The IMU biases
+  // are assumed constant over this batch of IMU measurements. 
+  int  NUM_IMU_MEAS_PER_CHUNK = 25;
+
   // Export IMU measurements to CSV
   printIMUMeasMap2csv(imu);
 
@@ -458,9 +554,11 @@ int main(int argc, char* argv[]) {
   Point3 prior_point(initial_veh_state.head<3>());
   Pose3 prior_pose(prior_rotation, prior_point);
   Vector3 prior_velocity(initial_veh_state.tail<3>());
+ 
   // TODO: bias should be GM model, not constant
-  imuBias::ConstantBias
-      prior_imu_bias;  // Vector6: Use to init both accel and gyro bias
+  // prior mean for bias at each time
+  // Vector6: Use to init both accel and gyro bias
+  imuBias::ConstantBias prior_imu_bias;
   cout << "initial point: " << prior_point << "\n";
   cout << "prior_pose: " << prior_pose << "\n";
   cout << "prior_velocity: " << prior_velocity << "\n";
@@ -514,6 +612,13 @@ int main(int argc, char* argv[]) {
   initial_values.print("initial_values");
 
   IMU_model_params imu_constants;
+  double ASD_N_accel = 50e-6; // g
+  double ASD_BI_accel= 8.0e-6;// ?
+  imu_constants.set_accelInG(ASD_N_accel, ASD_BI_accel);
+  double ASD_N_gyro  = 1e-3;// deg
+  double ASD_BI_gyro = 0.9; // deg/rthr
+  imu_constants.set_gyroInDeg(ASD_N_gyro, ASD_BI_gyro);
+  imu_constants.print_IMU_params();
   auto sPntrImuNoise =
       imuParams(sample_period,
                 imu_constants);  // define IMU noise model parameters
@@ -526,8 +631,8 @@ int main(int argc, char* argv[]) {
   bias_process_cov.topLeftCorner<3, 3>() = sPntrImuNoise->biasAccCovariance;
   bias_process_cov.bottomRightCorner<3, 3>() =
       sPntrImuNoise->biasOmegaCovariance;
-  imuBias::ConstantBias zeroBias;  // measurement 0
   auto bias_process_noise = noiseModel::Gaussian::Covariance(bias_process_cov);
+  
 
   // The PIMS have four steps (search PIM Step):
   // PIM Step 1: declare a PIM
@@ -539,8 +644,8 @@ int main(int argc, char* argv[]) {
   NavState prev_state(
       prior_pose,
       prior_velocity);  // init state before first IMU measurement in PIM
-  imuBias::ConstantBias prev_bias =
-      prior_imu_bias;  // init bias before first IMU measurement in PIM
+  // init bias before first IMU measurement in PIM    
+  imuBias::ConstantBias prev_bias = prior_imu_bias;  
 
   cout << "Starting loop over " << num_imu_measurements
        << " IMU measurements\n";
@@ -562,7 +667,8 @@ int main(int argc, char* argv[]) {
     bool is_gps_time = (abs(tm - OBS_INTERVAL * (gps_measurement_count + 1)) <=
                         sample_period / 2) ||
                        (tm >= OBS_INTERVAL * (gps_measurement_count + 1));
-    bool is_chunk_full = (imu_measurement_count >= 25);
+
+    bool is_chunk_full = (imu_measurement_count >= NUM_IMU_MEAS_PER_CHUNK);
 
     if (is_gps_time || is_chunk_full) {
       node_count++;
@@ -612,7 +718,7 @@ int main(int argc, char* argv[]) {
       // covariance Q.
       //
       graph->add(BetweenFactor<imuBias::ConstantBias>(
-          B(node_count - 1), B(node_count), zeroBias, bias_process_noise));
+          B(node_count - 1), B(node_count), prior_imu_bias, bias_process_noise));
 
       // ----- Add GPS factor if stationary time (so we anchor the pose) -----
       if (is_gps_time) {
