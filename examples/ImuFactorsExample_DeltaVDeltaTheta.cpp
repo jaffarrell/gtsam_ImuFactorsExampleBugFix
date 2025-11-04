@@ -286,7 +286,8 @@ struct IMU_model_params {
   double gyro_noise_rtCov{0};  // discrete-time angl. RW std
   
 
-  IMU_model_params() {
+  IMU_model_params(double Ts) {
+    this->Ts = Ts;
     double Tpa = 100.0;  // seconds.
     Tba = Tpa / 1.89;    // seconds, Eqn. (37) in [CSM]
     double Tpg = 32;     // seconds.
@@ -306,12 +307,32 @@ struct IMU_model_params {
   void print_instrument(string instrmnt, double Tb, double phi, double bias_cov_ss, 
     double noise_rtPSD, double bias_dn_PSD, 
     double noise_rtCov, double bias_dn_cov){
-      cout << "The " << instrmnt << " model parameters are: \n"
-           << "\tIn continuous-time: Correl. time = " << Tb << ", vel. RW rtPSD = " << noise_rtPSD
-           << ", bias drvng. noise rtPSD = " << sqrt(bias_dn_PSD) << ".\n"
-           << "\tIn discrete-time: phi = " << phi << ", vel. RW cov = " << noise_rtCov
-           << ", bias drvng. noise cov = " << sqrt(bias_dn_cov) << ".\n" << std::endl;
+      if (instrmnt == "accel"){
+        cout << "The accelerometer model parameters are: \n\t"
+           << "In continuous-time: Correl. time = " << Tb << "s, \n\t\t"
+           << "vel. RW rtPSD = " << noise_rtPSD << " m/s^2/rtHz = m/s/rtsec "
+           << "= " << noise_rtPSD * 60.0 << " m/s/rtHr, \n\t\t"
+           << "bias drvng. noise rtPSD = " << sqrt(bias_dn_PSD) << " m/s^3/rtHz. \n\t"
+           << "In discrete-time: phi = " << phi << ", vel. RW std = " << noise_rtCov << " m/s, \n\t\t"
+           << "bias drvng. noise cov = " << sqrt(bias_dn_cov) << " m/s^2.\n"
+           << "The steady-state bias std is " << sqrt(bias_cov_ss) << " m/s^2.\n" << std::endl;
+      }
+      else if (instrmnt == "gyro"){
+        cout << "The gyroscope model parameters are: \n\t"
+           << "In continuous-time: Correl. time = " << Tb << "s, \n\t\t"
+           << "angle RW rtPSD = " << noise_rtPSD << " rad/s/rtHz = rad/rtsec "
+           << "= " << noise_rtPSD * 180.0 * 60.0 / M_PI << " deg/rtHr, \n\t\t"
+           << "bias drvng. noise rtPSD = " << sqrt(bias_dn_PSD) << " rad/s^2/rtHz = rad/s/rtsec "
+           << "= " << sqrt(bias_dn_PSD) * 180.0 * 60.0 / M_PI << " deg/s/rtHr. \n\t"
+           << "In discrete-time: phi = " << phi << ", vel. RW std = " << noise_rtCov << " rads\n\t\t"
+           << "bias drvng. noise cov = " << sqrt(bias_dn_cov) << " rad/s.\n" 
+           << "The steady-state bias std is " << sqrt(bias_cov_ss) << " rad/s "
+           << "= " << sqrt(bias_cov_ss) * 180.0 / M_PI << " deg/s.\n" << std::endl;
+      }else{
+        cout << "Unknown instrument: " << instrmnt << std::endl;
+      }
     }
+  
 
   void set_accelInG(double accel_noise_rtPSD_g, double Ba_g){
     // rt_PSD in m/s^2 TODO: units??
@@ -326,7 +347,7 @@ struct IMU_model_params {
   void set_gyroInDeg(double gyro_noise_rtPSD_dps, double Bg_degperhr){
     // rt_PSD in rad/sec TODO: units??
     gyro_noise_rtPSD = gyro_noise_rtPSD_dps * (DEG_2_RAD);
-    double Bg_rps = ((Bg_degperhr * (1 / 3600) * (DEG_2_RAD)));
+    double Bg_rps = ((Bg_degperhr * (1.0 / 3600.0) * (DEG_2_RAD)));
     phi_g   = compute_phi(Ts, Tbg);
     gyro_bias_dn_PSD = BiasInstabASD_to_BiasPSD(Bg_rps, Tbg );
     gyro_bias_cov_ss = compute_SteadyStateBiasCov(gyro_bias_dn_PSD, Tbg);
@@ -343,7 +364,7 @@ struct IMU_model_params {
     double biasInstab = biasInstabASD / 0.664; // Eqn. (32) in IEEE CSM
     // PSD for accel bias process noise, Eqn. (39) in [CSM]. Units are (m/s^2)/rtHz
     double bias_DrvngNs_PSD =
-      (2 * pow(biasInstab, 2) * log(2)) / (M_PI * pow(0.4365, 2) * (Tb));
+      (2.0 * pow(biasInstab, 2.0) * log(2.0)) / (M_PI * pow(0.4365, 2.0) * (Tb));
     return bias_DrvngNs_PSD;
   }
   
@@ -358,7 +379,7 @@ struct IMU_model_params {
   // Set P(k+1) = P(k) = bias_cov_ss and solve for Qd
   // P(k+1) = phi P(k) phi' + Qd     (assume scalars or diagonal matrices)
   double compute_BiasDiscrete_DrvngNs_cov(double phi, double bias_cov_ss){
-    double bias_GM_dn_cov = bias_cov_ss * (1 - pow(phi, 2.0));
+    double bias_GM_dn_cov = bias_cov_ss * (1.0 - pow(phi, 2.0));
     return bias_GM_dn_cov;
   }
 };
@@ -370,10 +391,10 @@ struct IMU_model_params {
 // See:
 // https://github.com/jaffarrell/AV-Matlab-SW/blob/main/AV_Python/ASD_to_GaussMarkovFirstOrder.py
 std::shared_ptr<PreintegratedCombinedMeasurements::Params> imuParams(
-    double Ts, IMU_model_params imu) {
+    IMU_model_params imu){
   // The following uses the Allen Standard Deviation sensor specs to build the
   // noise model for the IMU factor.
-
+  
   // Velocity random walk
   double accel_noise_rtPSD_g = 50e-6;  // rt_PSD (RW parameter N) in g's
   double accel_noise_rtPSD =
@@ -394,22 +415,23 @@ std::shared_ptr<PreintegratedCombinedMeasurements::Params> imuParams(
       (Ba_g * G) / 0.664;  // Bias instability in (m/s/s). Eqn. (32) in [CSM]
   // PSD of accel bias, Eqn. (39) in [CSM]. Units are (m/s^2)^2/Hz
   double accel_bias_rw_PSD =
-      (2 * pow(Ba, 2) * log(2)) / (M_PI * pow(0.4365, 2) * (imu.Tba));
+      (2.0 * pow(Ba, 2.0) * log(2.0)) / (M_PI * pow(0.4365, 2.0) * (imu.Tba));
   // Root PSD of accel bias, Eqn. (39) in [CSM]. Units are (m/s^2)/rtHz
   double accel_bias_rw_rtPSD = sqrt(accel_bias_rw_PSD);
   // value of PSD S_b for GM,
   // TODO: ??? double accel_bias_GM_SB = Ba/(pow(0.4365, 2.0) * Tpa); // Eqn.
   // (37)
   double mu_a =
-      1 / imu.Tba;  // accel bias decay rate, 1/sec. Eqn. (34) in [CSM]
-  double phi_a = exp(-Ts / imu.Tba);  // discrete-time decay rate
+      1.0 / imu.Tba;  // accel bias decay rate, 1/sec. Eqn. (34) in [CSM]
+  double phi_a = exp(-imu.Ts / imu.Tba);  // discrete-time decay rate
   // value of PSD S_b for GM. Units are (m/s^2)^2/Hz
   // TODO: Thinks this through for GM and Eqn. (37)
   double accel_bias_GM_SB = accel_bias_rw_PSD;  // Eqn. (39)
   // GM bias steady-state covariance, (m/sec^2)^2
   double accel_bias_GM_ss_cov = accel_bias_GM_SB / (2.0 * mu_a);
   // GM bias discrete-time driving noise
-  double accel_bias_GM_dn_cov = accel_bias_GM_ss_cov * (1 - pow(phi_a, 2.0));
+  double accel_bias_GM_dn_cov = accel_bias_GM_ss_cov * (1.0 - pow(phi_a, 2.0));
+
   std::cout << "Discrete-time accel driving noise std: "
             << sqrt(accel_bias_GM_dn_cov) << " m/s^2 \n"
             << "\twith phi = " << phi_a << " gives steady-state covariance of "
@@ -420,23 +442,24 @@ std::shared_ptr<PreintegratedCombinedMeasurements::Params> imuParams(
   // delay for peak
 
   double Bg_degperhr = 5.0; //0.9;  // ASD value in flat region, degrees per hour
-  double Bg = ((Bg_degperhr * (1 / 3600) * (DEG_2_RAD))) /
+  double Bg = ((Bg_degperhr * (1.0 / 3600.0) * (DEG_2_RAD))) /
               0.664;  // Bias instability in (rad/s). Eqn. (32) in [CSM]
   // PSD of gyro bias, Eqn. (39) in [CSM]. Units are (rad/s)^2/Hz
   double gyro_bias_rw_PSD =
-      (2 * pow(Bg, 2) * log(2)) / (M_PI * pow(0.4365, 2) * (imu.Tbg));
+      (2.0 * pow(Bg, 2.0) * log(2.0)) / (M_PI * pow(0.4365, 2.0) * (imu.Tbg));
   // Root PSD of gyro bias, Eqn. (39) in [CSM]. Units are (rad/s)/rtHz
   double gyro_bias_rw_rtPSD = sqrt(gyro_bias_rw_PSD);
   double mu_g = 1 / imu.Tbg;  // Gauss-Markov (GM) gyro bias decay rate, 1/sec.
                               // Eqn. (34) in [CSM]
-  double phi_g = exp(-Ts / imu.Tbg);  // GM discrete-time decay rate
+  double phi_g = exp(-imu.Ts / imu.Tbg);  // GM discrete-time decay rate
   // value of PSD S_b for GM. Units are (rad/s)^2/Hz
   // TODO: Thinks this through for GM and Eqn. (37)
   double gyro_bias_GM_SB = gyro_bias_rw_PSD;  // Eqn. (39)
   // GM bias steady-state covariance, (deg/sec)^2
   double gyro_bias_GM_ss_cov = gyro_bias_GM_SB / (2.0 * mu_g);
   // GM bias discrete-time driving noise
-  double gyro_bias_GM_dn_cov = gyro_bias_GM_ss_cov * (1 - pow(phi_g, 2.0));
+  double gyro_bias_GM_dn_cov = gyro_bias_GM_ss_cov * (1.0 - pow(phi_g, 2.0));
+
   std::cout << "Discrete-time gyro driving noise std: "
             << sqrt(gyro_bias_GM_dn_cov) << " deg/s \n"
             << "\twith phi = " << phi_g << " gives steady-state covariance of "
@@ -469,10 +492,10 @@ std::shared_ptr<PreintegratedCombinedMeasurements::Params> imuParams(
   sPntrPIM->biasAccCovariance = bias_acc_cov;      // acc bias in continuous
   sPntrPIM->biasOmegaCovariance = bias_omega_cov;  // gyro bias in continuous
 
-  cout<< "accelerometerCovariance = " << measured_acc_cov << ", \n"
-      << "integrationCovaraince   = " << integration_error_cov << ",\n"
-      << "gyroscopeCovariance     = " << measured_omega_cov << ",\n"
-      << "biasAccCovariance       = " << bias_acc_cov << ",\n"
+  cout<< "accelerometerCovariance = \n" << measured_acc_cov << ", \n"
+      << "integrationCovaraince   = \n" << integration_error_cov << ",\n"
+      << "gyroscopeCovariance     = \n" << measured_omega_cov << ",\n"
+      << "biasAccCovariance       = \n" << bias_acc_cov << ",\n"
       << "biasOmegaCovariance     = " << bias_omega_cov<< std::endl;
 
 #ifdef GTSAM_ALLOW_DEPRECATED_SINCE_V43
@@ -611,7 +634,7 @@ int main(int argc, char* argv[]) {
   graph->print("graph initial");
   initial_values.print("initial_values");
 
-  IMU_model_params imu_constants;
+  IMU_model_params imu_constants(sample_period);
   double ASD_N_accel = 50e-6; // g
   double ASD_BI_accel= 8.0e-6;// ?
   imu_constants.set_accelInG(ASD_N_accel, ASD_BI_accel);
@@ -619,11 +642,11 @@ int main(int argc, char* argv[]) {
   double ASD_BI_gyro = 0.9; // deg/rthr
   imu_constants.set_gyroInDeg(ASD_N_gyro, ASD_BI_gyro);
   imu_constants.print_IMU_params();
-  auto sPntrImuNoise =
-      imuParams(sample_period,
-                imu_constants);  // define IMU noise model parameters
-                                 // (continuous-time noise power spectral
-                                 // densities (units of variance × seconds))
+  // define IMU noise model parameters
+  // (continuous-time noise power spectral
+  // densities (units of variance × seconds))
+  auto sPntrImuNoise = imuParams(imu_constants);
+
 
   // We will use a small bias-process model noise as a baseline
   // Build 6x6 covariance for BetweenFactor: accel(3) then gyro(3)
