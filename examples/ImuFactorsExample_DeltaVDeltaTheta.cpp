@@ -446,10 +446,10 @@ std::shared_ptr<PreintegratedCombinedMeasurements::Params> imuParams(
   // measurement noise, gyro angle rate white noise PSD: (rad/s)^2 / Hz
   sPntrPIM->gyroscopeCovariance = gyro_meas_PSD;
 
-  // Driving noise, Accelerometer bias random walk: (m/s^2)^2 / s
+  // Driving noise, Accelerometer bias random walk: (m/s^2)^2 / s = (m/s^3)^2 / Hz
   sPntrPIM->biasAccCovariance = bias_acc_PSD;      // acc bias in continuous
 
-  // Driving noise, Gyro bias random walk: (rad/s)^2 / s
+  // Driving noise, Gyro bias random walk: (rad/s)^2 / s = (rad/s^2)^2 / Hz
   sPntrPIM->biasOmegaCovariance = bias_omega_PSD;  // gyro bias in continuous
 
   cout<< "integrationCovariance   = \n" << integration_error_cov << ",\n"
